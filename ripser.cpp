@@ -53,6 +53,8 @@
 #include <queue>
 #include <sstream>
 #include <unordered_map>
+#include <iostream>
+#include <fstream>
 
 #ifdef USE_GOOGLE_HASHMAP
 #include <sparsehash/sparse_hash_map>
@@ -477,17 +479,13 @@ public:
 	                                hash_map<index_t, index_t>& pivot_column_index, index_t dim);
 
 	void compute_dim_0_pairs(std::vector<diameter_index_t>& edges,
-	                         std::vector<diameter_index_t>& columns_to_reduce) {
+	                         std::vector<diameter_index_t>& columns_to_reduce, std::ostream& output_stream) {
 		union_find dset(n);
 
 		edges = get_edges();
 
 		std::sort(edges.rbegin(), edges.rend(),
 		          greater_diameter_or_smaller_index<diameter_index_t>());
-
-#ifdef PRINT_PERSISTENCE_PAIRS
-		std::cout << "persistence intervals in dim 0:" << std::endl;
-#endif
 
 		std::vector<index_t> vertices_of_edge(2);
 		for (auto e : edges) {
@@ -498,7 +496,7 @@ public:
 			if (u != v) {
 #ifdef PRINT_PERSISTENCE_PAIRS
 				if (get_diameter(e) != 0)
-					std::cout << " [0," << get_diameter(e) << ")" << std::endl;
+					output_stream << "0 0 " << get_diameter(e) << std::endl;
 #endif
 				dset.link(u, v);
 			} else
@@ -508,7 +506,7 @@ public:
 
 #ifdef PRINT_PERSISTENCE_PAIRS
 		for (index_t i = 0; i < n; ++i)
-			if (dset.find(i) == i) std::cout << " [0, )" << std::endl << std::flush;
+			if (dset.find(i) == i) output_stream << "0 0 inf" << std::endl << std::flush;
 #endif
 	}
 
@@ -523,11 +521,7 @@ public:
 	                                              bool& might_be_apparent_pair);
 
 	void compute_pairs(std::vector<diameter_index_t>& columns_to_reduce,
-	                   hash_map<index_t, index_t>& pivot_column_index, index_t dim) {
-
-#ifdef PRINT_PERSISTENCE_PAIRS
-		std::cout << "persistence intervals in dim " << dim << ":" << std::endl;
-#endif
+	                   hash_map<index_t, index_t>& pivot_column_index, index_t dim, std::ostream& output_stream) {
 
 #ifdef ASSEMBLE_REDUCTION_MATRIX
 		compressed_sparse_matrix<diameter_entry_t> reduction_matrix;
@@ -624,7 +618,7 @@ public:
 #ifdef INDICATE_PROGRESS
 							std::cout << "\033[K";
 #endif
-							std::cout << " [" << diameter << "," << death << ")" << std::endl
+							output_stream << dim << " " << diameter << " " << death << std::endl
 							          << std::flush;
 						}
 #endif
@@ -665,7 +659,7 @@ public:
 					}
 				} else {
 #ifdef PRINT_PERSISTENCE_PAIRS
-					std::cout << " [" << diameter << ", )" << std::endl << std::flush;
+					output_stream << dim << " " << diameter << " inf" << std::endl << std::flush;
 #endif
 					break;
 				}
@@ -679,17 +673,17 @@ public:
 
 	std::vector<diameter_index_t> get_edges();
 
-	void compute_barcodes() {
+	void compute_barcodes(std::ostream& output_stream) {
 
 		std::vector<diameter_index_t> simplices, columns_to_reduce;
 
-		compute_dim_0_pairs(simplices, columns_to_reduce);
+		compute_dim_0_pairs(simplices, columns_to_reduce, output_stream);
 
 		for (index_t dim = 1; dim <= dim_max; ++dim) {
 			hash_map<index_t, index_t> pivot_column_index;
 			pivot_column_index.reserve(columns_to_reduce.size());
 
-			compute_pairs(columns_to_reduce, pivot_column_index, dim);
+			compute_pairs(columns_to_reduce, pivot_column_index, dim, output_stream);
 
 			if (dim < dim_max) {
 				assemble_columns_to_reduce(simplices, columns_to_reduce, pivot_column_index,
@@ -986,7 +980,7 @@ compressed_lower_distance_matrix read_point_cloud(std::istream& input_stream) {
 
 	index_t n = eucl_dist.size();
 
-	std::cout << "point cloud with " << n << " points in dimension "
+	std::cout << "# point cloud with " << n << " points in dimension "
 	          << eucl_dist.points.front().size() << std::endl;
 
 	std::vector<value_t> distances;
@@ -1145,6 +1139,7 @@ void print_usage_and_exit(int exit_code) {
 int main(int argc, char** argv) {
 
 	const char* filename = nullptr;
+	const char* output = nullptr;
 
 	file_format format = DISTANCE_MATRIX;
 
@@ -1178,6 +1173,8 @@ int main(int argc, char** argv) {
 			size_t next_pos;
 			ratio = std::stof(parameter, &next_pos);
 			if (next_pos != parameter.size()) print_usage_and_exit(-1);
+		} else if (arg == "--output") {
+			output = argv[++i];
 		} else if (arg == "--format") {
 			std::string parameter = std::string(argv[++i]);
 			if (parameter == "lower-distance")
@@ -1215,6 +1212,14 @@ int main(int argc, char** argv) {
 		exit(-1);
 	}
 
+	std::ostream* output_stream = &std::cout;
+        std::ofstream fout;
+        if (output != nullptr) {
+            fout.open(output);
+            output_stream = &fout;
+        }
+
+
 	if (format == SPARSE) {
 		sparse_distance_matrix dist =
 		    read_sparse_distance_matrix(filename ? file_stream : std::cin);
@@ -1223,7 +1228,7 @@ int main(int argc, char** argv) {
 		          << std::endl;
 
 		ripser<sparse_distance_matrix>(std::move(dist), dim_max, threshold, ratio, modulus)
-		    .compute_barcodes();
+		    .compute_barcodes(*output_stream);
 	} else {
 
 		compressed_lower_distance_matrix dist =
@@ -1252,21 +1257,24 @@ int main(int argc, char** argv) {
 			if (d <= threshold) ++num_edges;
 		}
 
-		std::cout << "value range: [" << min << "," << max_finite << "]" << std::endl;
+		//output_stream << "# value range: [" << min << "," << max_finite << "]" << std::endl;
 
 		if (threshold >= max) {
-			std::cout << "distance matrix with " << dist.size() << " points" << std::endl;
+			//output_stream << "# distance matrix with " << dist.size() << " points" << std::endl;
 			ripser<compressed_lower_distance_matrix>(std::move(dist), dim_max, threshold, ratio,
 			                                         modulus)
-			    .compute_barcodes();
+			    .compute_barcodes(*output_stream);
 		} else {
-			std::cout << "sparse distance matrix with " << dist.size() << " points and "
-			          << num_edges << "/" << (dist.size() * dist.size() - 1) / 2 << " entries"
-			          << std::endl;
+			//output_stream << "# sparse distance matrix with " << dist.size() << " points and "
+			//          << num_edges << "/" << (dist.size() * dist.size() - 1) / 2 << " entries"
+			//          << std::endl;
 
 			ripser<sparse_distance_matrix>(sparse_distance_matrix(std::move(dist), threshold),
 			                               dim_max, threshold, ratio, modulus)
-			    .compute_barcodes();
+			    .compute_barcodes(*output_stream);
 		}
 	}
+        if (output != nullptr) {
+            fout.close();
+        }
 }
