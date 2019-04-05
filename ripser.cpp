@@ -34,6 +34,9 @@
  other computer software, distribute, and sublicense such enhancements or
  derivative works thereof, in binary and source code form.
 
+ Modifications :
+  + 04/2019 : Add output program argument to output persistence diagram in a file.
+            : Add OFF input file format support
 */
 
 //#define ASSEMBLE_REDUCTION_MATRIX
@@ -951,7 +954,8 @@ enum file_format {
 	POINT_CLOUD,
 	DIPHA,
 	SPARSE,
-	RIPSER
+	RIPSER,
+	OFF_FILE_FORMAT
 };
 
 template <typename T> T read(std::istream& s) {
@@ -966,6 +970,50 @@ compressed_lower_distance_matrix read_point_cloud(std::istream& input_stream) {
 	std::string line;
 	value_t value;
 	while (std::getline(input_stream, line)) {
+		std::vector<value_t> point;
+		std::istringstream s(line);
+		while (s >> value) {
+			point.push_back(value);
+			s.ignore();
+		}
+		if (!point.empty()) points.push_back(point);
+		assert(point.size() == points.front().size());
+	}
+
+	euclidean_distance_matrix eucl_dist(std::move(points));
+
+	index_t n = eucl_dist.size();
+
+	std::cout << "# point cloud with " << n << " points in dimension "
+	          << eucl_dist.points.front().size() << std::endl;
+
+	std::vector<value_t> distances;
+
+	for (int i = 0; i < n; ++i)
+		for (int j = 0; j < i; ++j) distances.push_back(eucl_dist(i, j));
+
+	return compressed_lower_distance_matrix(std::move(distances));
+}
+
+compressed_lower_distance_matrix read_off(std::istream& input_stream) {
+	std::vector<std::vector<value_t>> points;
+
+	std::string line;
+	value_t value;
+	// OFF header
+	if(!std::getline(input_stream, line)) {
+		std::cout << "Empty file" << std::endl;
+		exit(-1);
+	}
+	if (line.compare("OFF") != 0 && line.compare("nOFF") != 0) {
+		std::cout << "Non OFF header" << std::endl;
+		exit(-1);
+	}
+	// (dimension if nOFF) nb_points nb_edges nb_faces
+	std::getline(input_stream, line);
+
+	while (std::getline(input_stream, line)) {
+		//std::cout << "line" << line << std::endl;
 		std::vector<value_t> point;
 		std::istringstream s(line);
 		while (s >> value) {
@@ -1100,6 +1148,8 @@ compressed_lower_distance_matrix read_file(std::istream& input_stream, file_form
 		return read_point_cloud(input_stream);
 	case DIPHA:
 		return read_dipha(input_stream);
+	case OFF_FILE_FORMAT:
+		return read_off(input_stream);
 	default:
 		return read_ripser(input_stream);
 	}
@@ -1125,6 +1175,8 @@ void print_usage_and_exit(int exit_code) {
 	    << "                     sparse         (sparse distance matrix in Sparse Triplet format)"
 	    << std::endl
 	    << "                     ripser         (distance matrix in Ripser binary file format)"
+	    << std::endl
+	    << "                     off            (OFF header followed by point cloud in Euclidean space)"
 	    << std::endl
 	    << "  --dim <k>        compute persistent homology up to dimension <k>" << std::endl
 	    << "  --threshold <t>  compute Rips complexes up to diameter <t>" << std::endl
@@ -1185,6 +1237,8 @@ int main(int argc, char** argv) {
 				format = DISTANCE_MATRIX;
 			else if (parameter == "point-cloud")
 				format = POINT_CLOUD;
+			else if (parameter == "off")
+				format = OFF_FILE_FORMAT;
 			else if (parameter == "dipha")
 				format = DIPHA;
 			else if (parameter == "sparse")
